@@ -1,6 +1,6 @@
 Gem::Specification.new do |s|
   s.name          = "printnode"
-  s.version       = "1.0.6"
+  s.version       = "1.0.7"
   s.date          = "2015-08-19"
   s.summary       = "PrintNode-Ruby"
   s.description   = "Ruby API Library for PrintNode remote printing service."
@@ -11,6 +11,7 @@ Gem::Specification.new do |s|
   s.license       = "MIT"
   s.required_ruby_version = '>=1.9'
   s.post_install_message  = "Happy Printing!"
+  s.add_dependency 'activesupport', '>= 4.0.0', '< 6.0.0'
   s.add_development_dependency 'json', '>=0'
   s.add_development_dependency 'test-unit', '>=0'
 end
