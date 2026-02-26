@@ -535,6 +535,8 @@ module PrintNode
     end
 
     def instrument(payload = {}, &block)
+      return block.call unless defined?(ActiveSupport::Notifications)
+
       name = "#{payload[:event]}.printnode"
       payload[:origin] = "printnode"
       payload.update(extra_payload_data)
