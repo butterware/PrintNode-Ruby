@@ -11,6 +11,7 @@ module PrintNode
   class Client
 
     attr_reader :headers
+    attr_reader :extra_payload_data
 
     # If an argument is not a string, map it to a string so it can be escaped
     # and put into a URL.
@@ -30,9 +31,10 @@ module PrintNode
     # @param api_url [String] api_url to be used in requests.
     #
     # @see PrintNode::Auth
-    def initialize(auth, api_url = 'https://api.printnode.com')
+    def initialize(auth, api_url = 'https://api.printnode.com', extra_payload_data: {})
       @auth = auth
       @api_url = api_url
+      @extra_payload_data = extra_payload_data
       @headers = {}
     end
 
@@ -113,14 +115,26 @@ module PrintNode
     #
     # == Returns:
     # A response object of the request.
-    def delete(end_point_url)
+    def delete(end_point_url, event = nil)
       uri = URI(@api_url + end_point_url)
       request = Net::HTTP::Delete.new(uri)
       @headers.each_with_index do |(k, v)|
         request[k] = v
       end
       request.basic_auth(@auth.credentials[0], @auth.credentials[1])
-      start_response(request, uri)
+
+      payload = {
+        backtrace: caller,
+        event: event,
+        method: :delete,
+        url: uri.to_s,
+        request_headers: @headers.dup,
+        request_query: uri.query,
+      }.compact
+
+      instrument(payload) do
+        start_response(request, uri)
+      end
     end
 
     # Sends a GET request to the specified URL.
@@ -129,14 +143,26 @@ module PrintNode
     #
     # == Returns:
     # A response object of the request.
-    def get(end_point_url)
+    def get(end_point_url, event = nil)
       uri = URI(@api_url + end_point_url)
       request = Net::HTTP::Get.new(uri)
       @headers.each_with_index do |(k, v)|
         request[k] = v
       end
       request.basic_auth(@auth.credentials[0], @auth.credentials[1])
-      start_response(request, uri)
+
+      payload = {
+        backtrace: caller,
+        event: event,
+        method: :get,
+        url: uri.to_s,
+        request_headers: @headers.dup,
+        request_query: uri.query,
+      }.compact
+
+      instrument(payload) do
+        start_response(request, uri)
+      end
     end
 
     # Sends a PATCH request to the specified URL.
@@ -146,7 +172,7 @@ module PrintNode
     #
     # == Returns:
     # A response object of the request.
-    def patch(end_point_url, data = nil)
+    def patch(end_point_url, data = nil, event = nil)
       uri = URI(@api_url + end_point_url)
       request = Net::HTTP::Patch.new uri
       @headers.each_with_index do |(k, v)|
@@ -155,7 +181,20 @@ module PrintNode
       request.basic_auth(@auth.credentials[0], @auth.credentials[1])
       request['Content-Type'] = 'application/json'
       request.body = data.to_json if data
-      start_response(request, uri)
+
+      payload = {
+        backtrace: caller,
+        event: event,
+        method: :patch,
+        url: uri.to_s,
+        request_headers: @headers.dup,
+        request_query: uri.query,
+        request_body: request.body,
+      }.compact
+
+      instrument(payload) do
+        start_response(request, uri)
+      end
     end
 
     # Sends a POST request to the specified URL.
@@ -165,7 +204,7 @@ module PrintNode
     #
     # == Returns:
     # A response object of the request.
-    def post(end_point_url, data = nil)
+    def post(end_point_url, data = nil, event = nil)
       uri = URI(@api_url + end_point_url)
       request = Net::HTTP::Post.new uri
       @headers.each_with_index do |(k, v)|
@@ -174,7 +213,20 @@ module PrintNode
       request.basic_auth(@auth.credentials[0], @auth.credentials[1])
       request['Content-Type'] = 'application/json'
       request.body = data.to_json if data
-      start_response(request, uri)
+
+      payload = {
+        backtrace: caller,
+        event: event,
+        method: :post,
+        url: uri.to_s,
+        request_headers: @headers.dup,
+        request_query: uri.query,
+        request_body: request.body,
+      }.compact
+
+      instrument(payload) do
+        start_response(request, uri)
+      end
     end
 
     # Sends a GET request to /whoami/.
@@ -183,7 +235,7 @@ module PrintNode
     # An OpenStruct object of the response. The design of this Object will be the same as the ones on the PrintNode API docs.
     # @see {https://www.printnode.com/docs/api/curl/#whoami Whoami on API Docs}
     def whoami
-      OpenStruct.new JSON.parse(get('/whoami/').body)
+      OpenStruct.new JSON.parse(get('/whoami/', :whoami).body)
     end
 
     # Sends a POST request to /account/.
@@ -203,7 +255,7 @@ module PrintNode
           hash[k] = v
         end
       end
-      response_object = JSON.parse(post('/account/', hash).body)
+      response_object = JSON.parse(post('/account/', hash, :create_account).body)
       parse_hash_to_struct(response_object)
     end
 
@@ -219,7 +271,7 @@ module PrintNode
     # @see http://www.printnode.com/docs/api/curl/#account-modification Account Modification on API Docs
     def modify_account(options = {})
       hash = options.dup
-      response_object = JSON.parse(patch('/account/', hash).body)
+      response_object = JSON.parse(patch('/account/', hash, :update_account).body)
       parse_hash_to_struct(response_object)
     end
 
@@ -228,7 +280,7 @@ module PrintNode
     # == Returns:
     # A boolean of whether the account was deleted or not.
     def delete_account?
-      JSON.parse('[' + delete('/account/').body + ']')[0]
+      JSON.parse('[' + delete('/account/', :delete_account).body + ']')[0]
     end
 
     # Sends a GET request to /account/tag/(tag_name).
@@ -239,7 +291,7 @@ module PrintNode
     # A string which is the value of the tag requested.
     def tags(tag_name)
       end_point_url = '/account/tag/' + escape_with_types(tag_name)
-      JSON.parse('[' + get(end_point_url).body + ']')[0]
+      JSON.parse('[' + get(end_point_url, :tag).body + ']')[0]
     end
 
     # Sends a POST request to /account/tag/(tag_name).
@@ -250,7 +302,7 @@ module PrintNode
     # If this creates a tag,  a String 'created' will be returned. If it updates one,  'updated' will be returned.
     def set_tag(tag_name, tag_value)
       end_point_url = '/account/tag/' + escape_with_types(tag_name)
-      JSON.parse('[' + post(end_point_url, tag_value).body + ']')[0]
+      JSON.parse('[' + post(end_point_url, tag_value, :upsert_tag).body + ']')[0]
     end
 
     # Sends a DELETE request to /account/tag/(tag_name).
@@ -259,7 +311,7 @@ module PrintNode
     # A boolean of whether the tag was deleted or not.
     def delete_tag?(tag_name)
       end_point_url = '/account/tag/' + escape_with_types(tag_name)
-      JSON.parse('[' + delete(end_point_url).body + ']')[0]
+      JSON.parse('[' + delete(end_point_url, :delete_tag).body + ']')[0]
     end
 
     # Sends a GET request to /account/apikey/(description).
@@ -270,7 +322,7 @@ module PrintNode
     # The API-Key itself.
     def apikeys(description)
       end_point_url = '/account/apikey/' + escape_with_types(description)
-      JSON.parse('[' + get(end_point_url).body + ']')[0]
+      JSON.parse('[' + get(end_point_url, :apikeys).body + ']')[0]
     end
 
     # Sends a POST request to /account/apikey/(description).
@@ -281,7 +333,7 @@ module PrintNode
     # The API-Key that was created.
     def create_apikey(description)
       end_point_url = '/account/apikey/' + escape_with_types(description)
-      JSON.parse('[' + post(end_point_url).body + ']')[0]
+      JSON.parse('[' + post(end_point_url, nil, :create_apikey).body + ']')[0]
     end
 
     # Sends a DELETE request to /account/apikey/(description).
@@ -292,7 +344,7 @@ module PrintNode
     # A boolean of whether the API-Key was deleted or not.
     def delete_apikey?(description)
       end_point_url = '/account/apikey/' + escape_with_types(description)
-      JSON.parse('[' + delete(end_point_url).body + ']')[0]
+      JSON.parse('[' + delete(end_point_url, :delete_apikey).body + ']')[0]
     end
 
     # Sends a GET request to /client/key/(uuid)?edition=(edition)&version=(version)
@@ -310,7 +362,7 @@ module PrintNode
                       escape_with_types(edition) +
                       '&version=' +
                       escape_with_types(version)
-      JSON.parse('[' + get(end_point_url).body + ']')[0]
+      JSON.parse('[' + get(end_point_url, :clientkeys).body + ']')[0]
     end
 
     # Sends a GET request to /download/client/(os)
@@ -322,7 +374,7 @@ module PrintNode
     # @see https://www.printnode.com/docs/api/curl/#account-download-management Client Downloads on API Docs
     def latest_client(os = 'windows')
       end_point_url = '/download/client/' + escape_with_types(os.downcase)
-      OpenStruct.new JSON.parse(get(end_point_url).body)
+      OpenStruct.new JSON.parse(get(end_point_url, :latest_client).body)
     end
 
     # Sends a GET request to /download/clients/(client_set)
@@ -334,7 +386,7 @@ module PrintNode
     # @see https://www.printnode.com/docs/api/curl/#account-download-management Client Downloads on API Docs
     def clients(client_set = '')
       end_point_url = '/download/clients/' + escape_with_types(client_set)
-      response_object = JSON.parse(get(end_point_url).body)
+      response_object = JSON.parse(get(end_point_url, :clients).body)
       parse_array_to_struct(response_object)
     end
 
@@ -348,7 +400,7 @@ module PrintNode
     def modify_client_downloads(client_set, enabled)
       hash = { 'enabled' => enabled }
       end_point_url = '/download/clients/' + escape_with_types(client_set)
-      JSON.parse(patch(end_point_url, hash).body)
+      JSON.parse(patch(end_point_url, hash, :update_client_downloads).body)
     end
 
     # Sends a GET request to /computers/(computer_set)
@@ -360,7 +412,7 @@ module PrintNode
     # @see https://www.printnode.com/docs/api/curl/#computers Computers on API Docs
     def computers(computer_set = '')
       end_point_url = '/computers/' + escape_with_types(computer_set)
-      response_object = JSON.parse(get(end_point_url).body)
+      response_object = JSON.parse(get(end_point_url, :computers).body)
       parse_array_to_struct(response_object)
     end
 
@@ -375,7 +427,7 @@ module PrintNode
       end_point_url = '/computer/' +
                       escape_with_types(computer_id) +
                       '/scales/'
-      response_object = JSON.parse(get(end_point_url).body)
+      response_object = JSON.parse(get(end_point_url, :scales).body)
       parse_array_to_struct(response_object)
     end
 
@@ -398,7 +450,7 @@ module PrintNode
       else
         end_point_url = '/printers/' + escape_with_types(set_a)
       end
-      response_object = JSON.parse(get(end_point_url).body)
+      response_object = JSON.parse(get(end_point_url, :printers).body)
       parse_array_to_struct(response_object)
     end
 
@@ -421,7 +473,7 @@ module PrintNode
       else
         end_point_url = '/printjobs/' + escape_with_types(set_a)
       end
-      response_object = JSON.parse(get(end_point_url).body)
+      response_object = JSON.parse(get(end_point_url, :printjobs).body)
       parse_array_to_struct(response_object)
     end
 
@@ -444,7 +496,7 @@ module PrintNode
           hash[k] = v
         end
       end
-      JSON.parse('[' + post('/printjobs/', hash).body + ']')[0]
+      JSON.parse('[' + post('/printjobs/', hash, :create_printjob).body + ']')[0]
     end
 
     # sends a GET request to /printjobs/(printjob_set)/states
@@ -462,7 +514,7 @@ module PrintNode
                         escape_with_types(printjob_set) +
                         '/states/'
       end
-      response_object = JSON.parse(get(end_point_url).body)
+      response_object = JSON.parse(get(end_point_url, :states).body)
       parse_array_to_struct(response_object)
     end
 
@@ -479,6 +531,26 @@ module PrintNode
         puts 'HTTP Error found: ' + e.object
         puts 'This was the body of the response: '
         puts e.message
+      end
+    end
+
+    def instrument(payload = {}, &block)
+      return block.call unless defined?(ActiveSupport::Notifications)
+
+      name = "#{payload[:event]}.printnode"
+      payload[:origin] = "printnode"
+      payload.update(extra_payload_data)
+
+      ActiveSupport::Notifications.instrument(name, payload) do |data|
+        response = block.call
+
+        data.update(
+          response_body: response&.body,
+          response_status: response&.code,
+          response_headers: response&.each_header&.to_a,
+        )
+
+        response
       end
     end
   end

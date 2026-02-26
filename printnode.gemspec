@@ -1,6 +1,6 @@
 Gem::Specification.new do |s|
   s.name          = "printnode"
-  s.version       = "1.0.6"
+  s.version       = "1.0.7"
   s.date          = "2015-08-19"
   s.summary       = "PrintNode-Ruby"
   s.description   = "Ruby API Library for PrintNode remote printing service."
