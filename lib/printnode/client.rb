@@ -102,7 +102,9 @@ module PrintNode
     def start_response(request, uri)
       response = Net::HTTP.start(uri.hostname,
                                  uri.port,
-                                 use_ssl: uri.scheme == 'https') do |http|
+                                 use_ssl: uri.scheme == 'https',
+                                 open_timeout: 10,
+                                 read_timeout: 30) do |http|
         http.request(request)
       end
       http_error_handler(response)
@@ -116,25 +118,7 @@ module PrintNode
     # == Returns:
     # A response object of the request.
     def delete(end_point_url, event = nil)
-      uri = URI(@api_url + end_point_url)
-      request = Net::HTTP::Delete.new(uri)
-      @headers.each_with_index do |(k, v)|
-        request[k] = v
-      end
-      request.basic_auth(@auth.credentials[0], @auth.credentials[1])
-
-      payload = {
-        backtrace: caller,
-        event: event,
-        method: :delete,
-        url: uri.to_s,
-        request_headers: @headers.dup,
-        request_query: uri.query,
-      }.compact
-
-      instrument(payload) do
-        start_response(request, uri)
-      end
+      execute_request(:delete, end_point_url, nil, event)
     end
 
     # Sends a GET request to the specified URL.
@@ -144,25 +128,7 @@ module PrintNode
     # == Returns:
     # A response object of the request.
     def get(end_point_url, event = nil)
-      uri = URI(@api_url + end_point_url)
-      request = Net::HTTP::Get.new(uri)
-      @headers.each_with_index do |(k, v)|
-        request[k] = v
-      end
-      request.basic_auth(@auth.credentials[0], @auth.credentials[1])
-
-      payload = {
-        backtrace: caller,
-        event: event,
-        method: :get,
-        url: uri.to_s,
-        request_headers: @headers.dup,
-        request_query: uri.query,
-      }.compact
-
-      instrument(payload) do
-        start_response(request, uri)
-      end
+      execute_request(:get, end_point_url, nil, event)
     end
 
     # Sends a PATCH request to the specified URL.
@@ -173,28 +139,7 @@ module PrintNode
     # == Returns:
     # A response object of the request.
     def patch(end_point_url, data = nil, event = nil)
-      uri = URI(@api_url + end_point_url)
-      request = Net::HTTP::Patch.new uri
-      @headers.each_with_index do |(k, v)|
-        request[k] = v
-      end
-      request.basic_auth(@auth.credentials[0], @auth.credentials[1])
-      request['Content-Type'] = 'application/json'
-      request.body = data.to_json if data
-
-      payload = {
-        backtrace: caller,
-        event: event,
-        method: :patch,
-        url: uri.to_s,
-        request_headers: @headers.dup,
-        request_query: uri.query,
-        request_body: request.body,
-      }.compact
-
-      instrument(payload) do
-        start_response(request, uri)
-      end
+      execute_request(:patch, end_point_url, data, event)
     end
 
     # Sends a POST request to the specified URL.
@@ -205,28 +150,7 @@ module PrintNode
     # == Returns:
     # A response object of the request.
     def post(end_point_url, data = nil, event = nil)
-      uri = URI(@api_url + end_point_url)
-      request = Net::HTTP::Post.new uri
-      @headers.each_with_index do |(k, v)|
-        request[k] = v
-      end
-      request.basic_auth(@auth.credentials[0], @auth.credentials[1])
-      request['Content-Type'] = 'application/json'
-      request.body = data.to_json if data
-
-      payload = {
-        backtrace: caller,
-        event: event,
-        method: :post,
-        url: uri.to_s,
-        request_headers: @headers.dup,
-        request_query: uri.query,
-        request_body: request.body,
-      }.compact
-
-      instrument(payload) do
-        start_response(request, uri)
-      end
+      execute_request(:post, end_point_url, data, event)
     end
 
     # Sends a GET request to /whoami/.
@@ -519,19 +443,11 @@ module PrintNode
     end
 
     # Handles HTTP errors in the code.
-    # If the HTTP status code is not 2xx (OK), it will raise an error.
+    # Raises PrintNode::APIError if the HTTP status code is not 2xx.
     #
     # @param response [Net::HTTPResponse] A response from any of the request methods.
     def http_error_handler(response)
-      begin
-        unless response.code.to_s.match('^2..')
-          fail APIError.new(response.code), response.body
-        end
-      rescue APIError => e
-        puts 'HTTP Error found: ' + e.object
-        puts 'This was the body of the response: '
-        puts e.message
-      end
+      raise APIError.new(response.code), response.body unless response.code.to_s.match(/^2/)
     end
 
     def instrument(payload = {}, &block)
@@ -553,5 +469,34 @@ module PrintNode
         response
       end
     end
+
+    private
+
+    def execute_request(method, end_point_url, data = nil, event = nil)
+      uri = URI(@api_url + end_point_url)
+      request = Net::HTTP.const_get(method.to_s.capitalize).new(uri)
+      @headers.each { |k, v| request[k] = v }
+      request.basic_auth(@auth.credentials[0], @auth.credentials[1])
+
+      if data
+        request['Content-Type'] = 'application/json'
+        request.body = data.to_json
+      end
+
+      payload = {
+        backtrace: caller,
+        event: event,
+        method: method,
+        url: uri.to_s,
+        request_headers: @headers.dup,
+        request_query: uri.query,
+        request_body: request.body,
+      }.compact
+
+      instrument(payload) do
+        start_response(request, uri)
+      end
+    end
+
   end
 end
