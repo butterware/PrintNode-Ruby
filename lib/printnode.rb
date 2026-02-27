@@ -1,5 +1,6 @@
 require 'rubygems'
 
+require 'printnode/response'
 require 'printnode/client'
 require 'printnode/api_exception'
 require 'printnode/auth'

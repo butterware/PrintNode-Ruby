@@ -1,3 +1,4 @@
+1.2.0 Replace OpenStruct with PrintNode::Response — a lightweight value object with dot-notation access that raises NoMethodError on missing fields
 1.1.0 Raise APIError on HTTP errors instead of swallowing them; consolidate HTTP request logic; add connection/read timeouts; update Ruby requirement to >= 2.7; dynamic gemspec file list
 1.0.0 Initial version
 1.0.1 -> 1.0.3 major changes that are incorrectly versioned.
