@@ -1,7 +1,6 @@
 require 'net/https'
 require 'uri'
 require 'json'
-require 'ostruct'
 require 'cgi'
 
 module PrintNode
@@ -38,40 +37,6 @@ module PrintNode
       @headers = {}
     end
 
-    # parses any hashes in an array to OpenStructs.
-    #
-    # @param array [Array] the array we want to parse.
-    #
-    # == Returns:
-    # An array with all hashes inside it made into OpenStructs.
-    def parse_array_to_struct(array)
-      output = []
-      array.each do |h|
-        if h.is_a?(Hash)
-          output.push(parse_hash_to_struct(h))
-        elsif h.is_a?(Array)
-          output.push(parse_array_to_struct(h))
-        else
-          output.push(h)
-        end
-      end
-      output
-    end
-
-    # parses any hashes in a hash to OpenStructs.  Parses any arrays to check if they have hashes to parse. Creates an OpenStruct for the hash.
-    #
-    # @param hash [Hash] the hash we want to parse.
-    #
-    # == Returns:
-    # A hash that is an OpenStruct, with all hashes inside it made into OpenStructs.
-    def parse_hash_to_struct(hash)
-      hash.each do |(k, v)|
-        hash[k] = parse_hash_to_struct(v) if v.is_a?(Hash)
-        hash[k] = parse_array_to_struct(v) if v.is_a?(Array)
-      end
-      OpenStruct.new hash
-    end
-
     # Sets authentication via an id of a Child Account.
     #
     # @param id [int] The id of the Child Account.
@@ -102,7 +67,9 @@ module PrintNode
     def start_response(request, uri)
       response = Net::HTTP.start(uri.hostname,
                                  uri.port,
-                                 use_ssl: uri.scheme == 'https') do |http|
+                                 use_ssl: uri.scheme == 'https',
+                                 open_timeout: 10,
+                                 read_timeout: 30) do |http|
         http.request(request)
       end
       http_error_handler(response)
@@ -116,25 +83,7 @@ module PrintNode
     # == Returns:
     # A response object of the request.
     def delete(end_point_url, event = nil)
-      uri = URI(@api_url + end_point_url)
-      request = Net::HTTP::Delete.new(uri)
-      @headers.each_with_index do |(k, v)|
-        request[k] = v
-      end
-      request.basic_auth(@auth.credentials[0], @auth.credentials[1])
-
-      payload = {
-        backtrace: caller,
-        event: event,
-        method: :delete,
-        url: uri.to_s,
-        request_headers: @headers.dup,
-        request_query: uri.query,
-      }.compact
-
-      instrument(payload) do
-        start_response(request, uri)
-      end
+      execute_request(:delete, end_point_url, nil, event)
     end
 
     # Sends a GET request to the specified URL.
@@ -144,25 +93,7 @@ module PrintNode
     # == Returns:
     # A response object of the request.
     def get(end_point_url, event = nil)
-      uri = URI(@api_url + end_point_url)
-      request = Net::HTTP::Get.new(uri)
-      @headers.each_with_index do |(k, v)|
-        request[k] = v
-      end
-      request.basic_auth(@auth.credentials[0], @auth.credentials[1])
-
-      payload = {
-        backtrace: caller,
-        event: event,
-        method: :get,
-        url: uri.to_s,
-        request_headers: @headers.dup,
-        request_query: uri.query,
-      }.compact
-
-      instrument(payload) do
-        start_response(request, uri)
-      end
+      execute_request(:get, end_point_url, nil, event)
     end
 
     # Sends a PATCH request to the specified URL.
@@ -173,28 +104,7 @@ module PrintNode
     # == Returns:
     # A response object of the request.
     def patch(end_point_url, data = nil, event = nil)
-      uri = URI(@api_url + end_point_url)
-      request = Net::HTTP::Patch.new uri
-      @headers.each_with_index do |(k, v)|
-        request[k] = v
-      end
-      request.basic_auth(@auth.credentials[0], @auth.credentials[1])
-      request['Content-Type'] = 'application/json'
-      request.body = data.to_json if data
-
-      payload = {
-        backtrace: caller,
-        event: event,
-        method: :patch,
-        url: uri.to_s,
-        request_headers: @headers.dup,
-        request_query: uri.query,
-        request_body: request.body,
-      }.compact
-
-      instrument(payload) do
-        start_response(request, uri)
-      end
+      execute_request(:patch, end_point_url, data, event)
     end
 
     # Sends a POST request to the specified URL.
@@ -205,37 +115,16 @@ module PrintNode
     # == Returns:
     # A response object of the request.
     def post(end_point_url, data = nil, event = nil)
-      uri = URI(@api_url + end_point_url)
-      request = Net::HTTP::Post.new uri
-      @headers.each_with_index do |(k, v)|
-        request[k] = v
-      end
-      request.basic_auth(@auth.credentials[0], @auth.credentials[1])
-      request['Content-Type'] = 'application/json'
-      request.body = data.to_json if data
-
-      payload = {
-        backtrace: caller,
-        event: event,
-        method: :post,
-        url: uri.to_s,
-        request_headers: @headers.dup,
-        request_query: uri.query,
-        request_body: request.body,
-      }.compact
-
-      instrument(payload) do
-        start_response(request, uri)
-      end
+      execute_request(:post, end_point_url, data, event)
     end
 
     # Sends a GET request to /whoami/.
     #
     # == Returns:
-    # An OpenStruct object of the response. The design of this Object will be the same as the ones on the PrintNode API docs.
+    # A Response object of the response. The design of this Object will be the same as the ones on the PrintNode API docs.
     # @see {https://www.printnode.com/docs/api/curl/#whoami Whoami on API Docs}
     def whoami
-      OpenStruct.new JSON.parse(get('/whoami/', :whoami).body)
+      Response.new JSON.parse(get('/whoami/', :whoami).body)
     end
 
     # Sends a POST request to /account/.
@@ -245,7 +134,7 @@ module PrintNode
     # @option options [Hash] :Tags tag_name => tag_value hash of tags to be added for this user.
     #
     # == Returns:
-    # An OpenStruct object of the response. The design of this Object will be the same as the ones on the PrintNode API docs.
+    # A Response object of the response. The design of this Object will be the same as the ones on the PrintNode API docs.
     # @see http://www.printnode.com/docs/api/curl/#account-creation Account Creation on API Docs
     def create_account(account, options = {})
       hash = {}
@@ -256,7 +145,7 @@ module PrintNode
         end
       end
       response_object = JSON.parse(post('/account/', hash, :create_account).body)
-      parse_hash_to_struct(response_object)
+      Response.new(response_object)
     end
 
     # Sends a PATCH request to /account/.
@@ -267,12 +156,12 @@ module PrintNode
     # @option options [String] :creatorRef new creator reference of user.
     #
     # == Returns:
-    # An OpenStruct object of the response. The design of this Object will be the same as the ones on the PrintNode API docs.
+    # A Response object of the response. The design of this Object will be the same as the ones on the PrintNode API docs.
     # @see http://www.printnode.com/docs/api/curl/#account-modification Account Modification on API Docs
     def modify_account(options = {})
       hash = options.dup
       response_object = JSON.parse(patch('/account/', hash, :update_account).body)
-      parse_hash_to_struct(response_object)
+      Response.new(response_object)
     end
 
     # Sends a DELETE request to /account/.
@@ -370,11 +259,11 @@ module PrintNode
     # @param os [String] the OS of the client to be found.
     #
     # == Returns:
-    # An OpenStruct object of the response. The design of this Object will be the same as the ones on the PrintNode API docs.
+    # A Response object of the response. The design of this Object will be the same as the ones on the PrintNode API docs.
     # @see https://www.printnode.com/docs/api/curl/#account-download-management Client Downloads on API Docs
     def latest_client(os = 'windows')
       end_point_url = '/download/client/' + escape_with_types(os.downcase)
-      OpenStruct.new JSON.parse(get(end_point_url, :latest_client).body)
+      Response.new JSON.parse(get(end_point_url, :latest_client).body)
     end
 
     # Sends a GET request to /download/clients/(client_set)
@@ -382,12 +271,12 @@ module PrintNode
     # @param client_set [String] a set of the clients to be got
     #
     # == Returns:
-    # An Array of OpenStruct objects. The design of this Object will be the same as the ones on the PrintNode API docs.
+    # An Array of Response objects. The design of this Object will be the same as the ones on the PrintNode API docs.
     # @see https://www.printnode.com/docs/api/curl/#account-download-management Client Downloads on API Docs
     def clients(client_set = '')
       end_point_url = '/download/clients/' + escape_with_types(client_set)
       response_object = JSON.parse(get(end_point_url, :clients).body)
-      parse_array_to_struct(response_object)
+      Response.wrap(response_object)
     end
 
     # Sends a PATCH request to /download/clients/(client_set)
@@ -408,12 +297,12 @@ module PrintNode
     # @param computer_set [String] a set of the computers to be got.
     #
     # == Returns:
-    # An Array of OpenStruct objects. The design of this Object will be the same as the ones on the PrintNode API docs.
+    # An Array of Response objects. The design of this Object will be the same as the ones on the PrintNode API docs.
     # @see https://www.printnode.com/docs/api/curl/#computers Computers on API Docs
     def computers(computer_set = '')
       end_point_url = '/computers/' + escape_with_types(computer_set)
       response_object = JSON.parse(get(end_point_url, :computers).body)
-      parse_array_to_struct(response_object)
+      Response.wrap(response_object)
     end
 
     # Sends a GET request to /computer/(computer_id)/scales
@@ -421,14 +310,14 @@ module PrintNode
     # @param computer_id [String] a set of computers to be got.
     #
     # == Returns:
-    # An Array of OpenStruct objects. The design of this Object will be the same as the ones on the PrintNode API docs.
+    # An Array of Response objects. The design of this Object will be the same as the ones on the PrintNode API docs.
     # @see https://www.printnode.com/docs/api/curl/#scales Scales on API Docs
     def scales(computer_id)
       end_point_url = '/computer/' +
                       escape_with_types(computer_id) +
                       '/scales/'
       response_object = JSON.parse(get(end_point_url, :scales).body)
-      parse_array_to_struct(response_object)
+      Response.wrap(response_object)
     end
 
     # Sends a GET request to /printers/(set_a), or:
@@ -439,7 +328,7 @@ module PrintNode
     #
     # @param set_b [String] set of printers.
     # == Returns:
-    # An Array of OpenStruct objects. The design of this Object will be the same as the ones on the PrintNode API docs.
+    # An Array of Response objects. The design of this Object will be the same as the ones on the PrintNode API docs.
     # @see https://www.printnode.com/docs/api/curl/#printers Printers on API Docs
     def printers(set_a = '', set_b = nil)
       if set_b
@@ -451,7 +340,7 @@ module PrintNode
         end_point_url = '/printers/' + escape_with_types(set_a)
       end
       response_object = JSON.parse(get(end_point_url, :printers).body)
-      parse_array_to_struct(response_object)
+      Response.wrap(response_object)
     end
 
     # Sends a GET request to /printjobs/(set_a), or:
@@ -462,7 +351,7 @@ module PrintNode
     #
     # @param set_b [String] set of printjobs.
     # == Returns:
-    # An Array of OpenStruct objects. The design of this Object will be the same as the ones on the PrintNode API docs.
+    # An Array of Response objects. The design of this Object will be the same as the ones on the PrintNode API docs.
     # @see https://www.printnode.com/docs/api/curl/#printjob-viewing PrintJobs on API Docs
     def printjobs(set_a = '', set_b = nil)
       if set_b
@@ -474,7 +363,7 @@ module PrintNode
         end_point_url = '/printjobs/' + escape_with_types(set_a)
       end
       response_object = JSON.parse(get(end_point_url, :printjobs).body)
-      parse_array_to_struct(response_object)
+      Response.wrap(response_object)
     end
 
     # Sends a POST request to /printjobs/.
@@ -504,7 +393,7 @@ module PrintNode
     # @param printjob_set [String] set of printjobs that we will get states for.
     #
     # == Returns:
-    # An Array of OpenStruct objects. The design of this Object will be the same as the ones on the PrintNode API docs.
+    # An Array of Response objects. The design of this Object will be the same as the ones on the PrintNode API docs.
     # @see https://www.printnode.com/docs/api/curl/#printjob-states PrintJob states on API Docs
     def states(printjob_set = '')
       if printjob_set == ''
@@ -515,23 +404,15 @@ module PrintNode
                         '/states/'
       end
       response_object = JSON.parse(get(end_point_url, :states).body)
-      parse_array_to_struct(response_object)
+      Response.wrap(response_object)
     end
 
     # Handles HTTP errors in the code.
-    # If the HTTP status code is not 2xx (OK), it will raise an error.
+    # Raises PrintNode::APIError if the HTTP status code is not 2xx.
     #
     # @param response [Net::HTTPResponse] A response from any of the request methods.
     def http_error_handler(response)
-      begin
-        unless response.code.to_s.match('^2..')
-          fail APIError.new(response.code), response.body
-        end
-      rescue APIError => e
-        puts 'HTTP Error found: ' + e.object
-        puts 'This was the body of the response: '
-        puts e.message
-      end
+      raise APIError.new(response.code), response.body unless response.code.to_s.match(/^2/)
     end
 
     def instrument(payload = {}, &block)
@@ -553,5 +434,34 @@ module PrintNode
         response
       end
     end
+
+    private
+
+    def execute_request(method, end_point_url, data = nil, event = nil)
+      uri = URI(@api_url + end_point_url)
+      request = Net::HTTP.const_get(method.to_s.capitalize).new(uri)
+      @headers.each { |k, v| request[k] = v }
+      request.basic_auth(@auth.credentials[0], @auth.credentials[1])
+
+      if data
+        request['Content-Type'] = 'application/json'
+        request.body = data.to_json
+      end
+
+      payload = {
+        backtrace: caller,
+        event: event,
+        method: method,
+        url: uri.to_s,
+        request_headers: @headers.dup,
+        request_query: uri.query,
+        request_body: request.body,
+      }.compact
+
+      instrument(payload) do
+        start_response(request, uri)
+      end
+    end
+
   end
 end
